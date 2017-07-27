@@ -32,14 +32,15 @@ def algo_max_runtime_secs():
     global err_bound
     seed = 12345
 
-    # word2vec
-    train = h2o.import_file(pyunit_utils.locate("bigdata/laptop/text8.gz"), header=1, col_types=["string"])
-    used = train[0:train.nrow/100, 0]
-    w2v_model = H2OWord2vecEstimator()
-    grabRuntimeInfo(err_bound, w2v_model, used, [], 0)
-    h2o.remove(train)
+    # deeplearning
+    training1_data = h2o.import_file(path=pyunit_utils.locate("smalldata/gridsearch/gaussian_training1_set.csv"))
+    y_index = training1_data.ncol-1
+    x_indices = list(range(y_index))
+    model = H2ODeepLearningEstimator(distribution='gaussian', seed=seed, hidden=[10, 10, 10])
+    grabRuntimeInfo(err_bound, 2.0, model, training1_data, x_indices, y_index)
+    cleanUp([training1_data, model])
 
-    # stack ensemble
+    # stack ensemble, stacking part is not iterative
     train = h2o.import_file(path=pyunit_utils.locate("smalldata/testng/higgs_train_5k.csv"),
                             destination_frame="higgs_train_5k")
     x = train.columns
@@ -65,7 +66,32 @@ def algo_max_runtime_secs():
 
     my_rf.train(x=x, y=y, training_frame=train)
     stack = H2OStackedEnsembleEstimator(model_id="my_ensemble_binomial", base_models=[my_gbm.model_id,  my_rf.model_id])
-    grabRuntimeInfo(err_bound, stack, train, x, y)
+    grabRuntimeInfo(err_bound*10, 2.0, stack, train, x, y)
+    cleanUp([train, my_gbm, my_rf, stack])
+
+    # GBM run
+    training1_data = h2o.import_file(path=pyunit_utils.locate("smalldata/gridsearch/multinomial_training1_set.csv"))
+    y_index = training1_data.ncol-1
+    x_indices = list(range(y_index))
+    training1_data[y_index] = training1_data[y_index].round().asfactor()
+    model = H2OGradientBoostingEstimator(distribution="multinomial", seed=seed)
+    grabRuntimeInfo(err_bound, 2.0, model, training1_data, x_indices, y_index)
+    cleanUp([model])
+
+    # GLM run
+    model = H2OGeneralizedLinearEstimator(family='multinomial', seed=seed)
+    grabRuntimeInfo(err_bound, 2.0, model, training1_data, x_indices, y_index)
+    cleanUp([model])
+
+    # naivebayes, not iterative
+    model = H2ONaiveBayesEstimator(compute_metrics=True)
+    grabRuntimeInfo(err_bound*10, 2.0, model, training1_data, x_indices, y_index)
+    cleanUp([model])
+
+    # random foreset
+    model = H2ORandomForestEstimator(ntrees=100, score_tree_interval=0)
+    grabRuntimeInfo(err_bound, 2.0, model, training1_data, x_indices)
+    cleanUp([model, training1_data])
 
     # deepwater
     if H2ODeepWaterEstimator.available():
@@ -75,65 +101,62 @@ def algo_max_runtime_secs():
         y_index = "Angaus"
         x_indices = list(range(1, training1_data.ncol))
         model = H2ODeepWaterEstimator(epochs=50, hidden=[4096, 4096, 4096], hidden_dropout_ratios=[0.2, 0.2, 0.2])
-        grabRuntimeInfo(err_bound, model, training1_data, x_indices, y_index)
-        h2o.remove(training1_data)
-
-    # deeplearning
-    training1_data = h2o.import_file(path=pyunit_utils.locate("smalldata/gridsearch/gaussian_training1_set.csv"))
-    y_index = training1_data.ncol-1
-    x_indices = list(range(y_index))
-    model = H2ODeepLearningEstimator(distribution='gaussian', seed=seed, hidden=[10, 10, 10])
-    grabRuntimeInfo(err_bound, model, training1_data, x_indices, y_index)
-    h2o.remove(model)
-
-    # GBM run
-    h2o.remove(training1_data)
-    training1_data = h2o.import_file(path=pyunit_utils.locate("smalldata/gridsearch/multinomial_training1_set.csv"))
-    y_index = training1_data.ncol-1
-    x_indices = list(range(y_index))
-    training1_data[y_index] = training1_data[y_index].round().asfactor()
-    model = H2OGradientBoostingEstimator(distribution="multinomial", seed=seed)
-    grabRuntimeInfo(err_bound, model, training1_data, x_indices, y_index)
-
-    # GLM run
-    model = H2OGeneralizedLinearEstimator(family='multinomial', seed=seed)
-    grabRuntimeInfo(err_bound, model, training1_data, x_indices, y_index)
-
-    # naivebayes, not iterative
-    model = H2ONaiveBayesEstimator(compute_metrics=True)
-    grabRuntimeInfo(err_bound*2, model, training1_data, x_indices, y_index)
-
-    # random foreset
-    model = H2ORandomForestEstimator(ntrees=100, score_tree_interval=0)
-    grabRuntimeInfo(err_bound, model, training1_data, x_indices)
+        grabRuntimeInfo(err_bound, 2.0, model, training1_data, x_indices, y_index)
+        cleanUp([training1_data, model])
 
     # GLRM, do not make sense to stop in the middle of an iteration
-    h2o.remove(training1_data)
     training1_data = h2o.import_file(path=pyunit_utils.locate("smalldata/gridsearch/glrmdata1000x25.csv"))
     x_indices = list(range(training1_data.ncol))
     model = H2OGeneralizedLowRankEstimator(k=10, loss="Quadratic", gamma_x=0.3,
                                            gamma_y=0.3, transform="STANDARDIZE")
-    grabRuntimeInfo(err_bound, model, training1_data, x_indices)
+    grabRuntimeInfo(err_bound, 2.0, model, training1_data, x_indices)
+    cleanUp([training1_data, model])
 
     # PCA
-    h2o.remove(training1_data)
     training1_data = h2o.import_file(path=pyunit_utils.locate("smalldata/gridsearch/pca1000by25.csv"))
     x_indices = list(range(training1_data.ncol))
     model = H2OPCA(k=10, transform="STANDARDIZE", pca_method="Power", compute_metrics=True)
-    grabRuntimeInfo(err_bound, model, training1_data, x_indices)
+    grabRuntimeInfo(err_bound, 1.2, model, training1_data, x_indices)
+    cleanUp([training1_data, model])
 
     # kmeans
-    h2o.remove(training1_data)
     training1_data = h2o.import_file(path=pyunit_utils.locate("smalldata/gridsearch/kmeans_8_centers_3_coords.csv"))
     x_indices = list(range(training1_data.ncol))
     model = H2OKMeansEstimator(k=10)
-    grabRuntimeInfo(err_bound, model, training1_data, x_indices)
+    grabRuntimeInfo(err_bound, 2.0, model, training1_data, x_indices)
+    cleanUp([training1_data, model])
 
-    if sum(model_within_max_runtime):
+    # word2vec
+    train = h2o.import_file(pyunit_utils.locate("bigdata/laptop/text8.gz"), header=1, col_types=["string"])
+    used = train[0:train.nrow/100, 0]
+    w2v_model = H2OWord2vecEstimator()
+    grabRuntimeInfo(err_bound, 2.0, w2v_model, used, [], 0)
+    cleanUp([train, used, w2v_model])
+
+    if sum(model_within_max_runtime)>0:
         sys.exit(1)
 
 
-def grabRuntimeInfo(err_bound, model, training_data, x_indices, y_index=0):
+def grabRuntimeInfo(err_bound, reduction_factor, model, training_data, x_indices, y_index=0):
+    '''
+    This function will train the passed model, extract the model runtime.  Next it train the model again
+    with the max_runtime_secs set to the original model runtime divide by half.  At the end of both runs, it
+    will perform several tasks:
+    1. it will extract the new model runtime, calculate the runtime overrun factor as
+        (new model runtime - max_runtime_secs)/max_runtime_secs.
+    2. for iterative algorithms, it will calculate number of iterations/epochs dropped between the two models;
+    3. determine if the timing test passes/fails based on the runtime overrun factor and the iterations/epochs drop.
+        - test passed if runtime overrun factor < err_bound or if iterations/epochs drop > 0
+    4. it will print out all the related information regarding the timing test.
+
+    :param err_bound: runtime overrun factor used to determine if test passed/failed
+    :param reduction_factor: how much run time to cut in order to set the max_runtime_secs
+    :param model: model to be evaluated
+    :param training_data: H2OFrame containing training dataset
+    :param x_indices: prediction input indices to model.train
+    :param y_index: response index to model.train
+    :return: None
+    '''
     global model_runtime
     global model_maxRuntime
     global algo_names
@@ -150,8 +173,9 @@ def grabRuntimeInfo(err_bound, model, training_data, x_indices, y_index=0):
         else:
             model.train(x=x_indices, y=y_index, training_frame=training_data)
     algo_names.append(model.algo)
+    model_iteration = checkIteration(model)
     model_runtime.append(model._model_json["output"]["run_time"]/1000.0)
-    model_maxRuntime.append(model_runtime[-1]/2.5)
+    model_maxRuntime.append(model_runtime[-1]/reduction_factor)
     if unsupervised:
         model.train(x=x_indices, training_frame=training_data, max_runtime_secs=model_maxRuntime[-1])
     else:
@@ -160,34 +184,40 @@ def grabRuntimeInfo(err_bound, model, training_data, x_indices, y_index=0):
         else:
             model.train(x=x_indices, y=y_index, training_frame=training_data, max_runtime_secs=model_maxRuntime[-1])
 
-    model_iteration = checkIteration(model)
+
     actual_model_runtime.append(model._model_json["output"]["run_time"]/1000.0)
     # capture model runtime with
     model_runtime_overrun.append((actual_model_runtime[-1]-model_maxRuntime[-1])*1.0/model_maxRuntime[-1])
 
-    if (model_runtime_overrun[-1]>err_bound):
-        model_within_max_runtime.append(1)
-    else:
-        model_within_max_runtime.append(0)
-
     print("Model: {0}, \nMax_runtime_sec: {1}, \nActual_model_runtime_sec: {2}, "
           "\nRun time overrun: {3}".format(algo_names[-1], model_maxRuntime[-1],
                                                actual_model_runtime[-1], model_runtime_overrun[-1]))
-    iteration_change = checkIteration(model)-model_iteration    # pass test as long as iteration number has dropped
-    if (model_runtime_overrun[-1] > err_bound) and (iteration_change<=0):
-        print("********** Test failed.  Model training time exceeds max_runtime_sec by more than {0}.".format(err_bound))
-    else:
+    print("Number of epochs/iterations/trees without max_runtime_sec restriction: {0}"
+          "\nNumber of epochs/iterations/trees with max_runtime_sec "
+          "restriction: {1}".format(model_iteration, checkIteration(model)))
+    iteration_change = model_iteration - checkIteration(model)   # pass test as long as iteration number has dropped
+    if (model_runtime_overrun[-1] <= err_bound) or (iteration_change>0):
         print("********** Test passed!.")
+        model_within_max_runtime.append(0)
+    else:
+        print("********** Test failed.  Model training time exceeds max_runtime_sec by more than {0}.".format(err_bound))
+        model_within_max_runtime.append(1)
 
-    h2o.remove(model)
 
 def checkIteration(model):
     if model._model_json["output"]["scoring_history"] != None:
-        return len(model._model_json["output"]["scoring_history"].cell_values)
+        epochList=pyunit_utils.extract_scoring_history_field(model, "epochs")
+        if (epochList==None):   # return the scoring history length as number of iteration estimate
+            return len(model._model_json["output"]["scoring_history"].cell_values)
+        return epochList[-1]
     elif "epochs" in model._model_json["output"]:
         return model._model_json["output"]["epochs"]
     else:
         return 0
+
+def cleanUp(eleList):
+    for ele in eleList:
+        h2o.remove(ele)
 
 
 if __name__ == "__main__":
